@@ -1,4 +1,4 @@
-use netmap_sys::{nmport_d, nmport_open};
+use netmap_sys::{nmport_close, nmport_d, nmport_open};
 
 pub struct PortSpec {
     spec: String,
@@ -24,6 +24,12 @@ impl Port {
     fn open(spec: &String) -> Self {
         let port = unsafe { nmport_open(spec.as_ptr() as *const i8) };
         Self { port }
+    }
+}
+
+impl Drop for Port {
+    fn drop(&mut self) {
+        unsafe { nmport_close(self.port) }
     }
 }
 
