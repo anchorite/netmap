@@ -15,15 +15,24 @@ impl PortSpec {
         Self { spec }
     }
 
-    pub fn open_port(&self) -> Port {
+    pub fn open_port(&self) -> Result<Port, String> {
         Port::open(&self.spec)
     }
 }
 
 impl Port {
-    fn open(spec: &String) -> Self {
+    fn open(spec: &str) -> Result<Self, String> {
+        let port = Port::open_port(spec)?;
+        Ok(Self { port })
+    }
+
+    fn open_port(spec: &str) -> Result<*mut nmport_d, String> {
         let port = unsafe { nmport_open(spec.as_ptr() as *const i8) };
-        Self { port }
+        if port.is_null() {
+            Err(format!("Failed to open: {}", spec))
+        } else {
+            Ok(port)
+        }
     }
 }
 
