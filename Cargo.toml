@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 netmap-sys = { path = "../netmap-sys" }
+filedescriptor = "~0.7.0"

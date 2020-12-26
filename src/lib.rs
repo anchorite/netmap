@@ -1,4 +1,8 @@
 use std::ops::Index;
+use std::time::Duration;
+
+// TODO:
+// 1. Allow polling of multiple Ports
 
 use netmap_sys::{
     netmap_buf_from_ring_slot, netmap_ring, netmap_rxring, netmap_slot, netmap_slot_from_ring,
@@ -11,8 +15,10 @@ pub struct PortSpec {
 
 pub struct Port {
     port: *mut nmport_d,
+    fd: i32,
     rx_rings: Vec<Ring>,
     tx_rings: Vec<Ring>,
+    cur_rxring: usize,
 }
 
 impl PortSpec {
@@ -32,10 +38,13 @@ impl Port {
         let port = Port::open_port(spec)?;
         let tx_rings = Port::tx_rings_from_port(&port);
         let rx_rings = Port::rx_rings_from_port(&port);
+        let fd = unsafe { (*port).fd };
         Ok(Self {
+            fd,
             port,
             tx_rings,
             rx_rings,
+            cur_rxring: 0,
         })
     }
 
@@ -45,6 +54,21 @@ impl Port {
 
     pub fn rx_rings(&self) -> &Vec<Ring> {
         &self.rx_rings
+    }
+
+    pub fn poll(&mut self, duration: Option<Duration>) -> bool {
+        self.reset_before_poll();
+        let pollfd = filedescriptor::pollfd {
+            fd: self.fd,
+            events: filedescriptor::POLLIN,
+            revents: 0,
+        };
+        // TODO: process error
+        filedescriptor::poll(&mut [pollfd], duration).unwrap() > 0
+    }
+
+    fn reset_before_poll(&mut self) {
+        self.cur_rxring = 0;
     }
 
     fn open_port(spec: &str) -> Result<*mut nmport_d, String> {
