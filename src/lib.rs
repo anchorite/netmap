@@ -5,8 +5,8 @@ use std::time::Duration;
 // 1. Allow polling of multiple Ports
 
 use netmap_sys::{
-    netmap_buf_from_ring_slot, netmap_ring, netmap_rxring, netmap_slot, netmap_slot_from_ring,
-    netmap_txring, nmport_close, nmport_d, nmport_open,
+    netmap_buf_from_ring_slot, netmap_ring, netmap_ring_empty, netmap_rxring, netmap_slot,
+    netmap_slot_from_ring, netmap_txring, nmport_close, nmport_d, nmport_open,
 };
 
 pub struct PortSpec {
@@ -67,8 +67,27 @@ impl Port {
         filedescriptor::poll(&mut [pollfd], duration).unwrap() > 0
     }
 
+    pub fn get_rx_buf(&mut self) -> Result<SlotBuf, String> {
+        let slot = self.get_cur_rx_slot()?;
+        Ok(SlotBuf::new(slot.as_slice(), slot.len()))
+    }
+
     fn reset_before_poll(&mut self) {
         self.cur_rxring = 0;
+    }
+
+    fn get_cur_rx_slot(&mut self) -> Result<&Slot, String> {
+        let ring = self.find_non_empty_ring()?;
+        ring.get_next_slot()
+            .ok_or_else(|| String::from("TODO: No next slot"))
+    }
+
+    fn find_non_empty_ring(&mut self) -> Result<&mut Ring, String> {
+        self.cur_rxring = self.rx_rings[self.cur_rxring..]
+            .iter()
+            .position(|r| !r.is_empty())
+            .ok_or("All rings are empty")?;
+        Ok(&mut self.rx_rings[self.cur_rxring])
     }
 
     fn open_port(spec: &str) -> Result<*mut nmport_d, String> {
@@ -166,8 +185,43 @@ impl Ring {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        unsafe { netmap_ring_empty(self.ring) }
+    }
+
+    pub fn get_next_slot(&mut self) -> Option<&Slot> {
+        if self.is_empty() {
+            None
+        } else {
+            let slot_ndx = self.head();
+            self.advance_next_slot();
+            Some(self.at(slot_ndx))
+        }
+    }
+
     pub fn at(&self, index: usize) -> &Slot {
         &self.slots[index]
+    }
+
+    fn head(&self) -> usize {
+        unsafe { (*self.ring).head as usize }
+    }
+
+    fn advance_next_slot(&mut self) {
+        let num_slots = unsafe { (*self.ring).num_slots as usize };
+        let next_head = Ring::next_head(self.head(), num_slots);
+        unsafe {
+            (*self.ring).head = next_head as u32;
+            (*self.ring).cur = next_head as u32;
+        };
+    }
+
+    fn next_head(head: usize, num_slots: usize) -> usize {
+        if head + 1 >= num_slots {
+            0
+        } else {
+            head + 1
+        }
     }
 
     fn valid_index(&self, index: usize) -> bool {
@@ -208,11 +262,46 @@ impl Slot {
     // TODO: decide whether the slice should be the buf len or the slot len
     pub fn as_slice(&self) -> &[u8] {
         let buf = unsafe { netmap_buf_from_ring_slot(self.ring, self.slot) };
-        unsafe { std::slice::from_raw_parts(buf, (*self.slot).len as usize) }
+        unsafe { std::slice::from_raw_parts(buf, self.len()) }
+    }
+
+    pub fn len(&self) -> usize {
+        unsafe { (*self.slot).len as usize }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
-impl Ring {}
+impl AsRef<[u8]> for Slot {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+pub struct SlotBuf<'a> {
+    buf: &'a [u8],
+    len: usize,
+}
+
+impl<'a> SlotBuf<'a> {
+    fn new(buf: &'a [u8], len: usize) -> SlotBuf {
+        SlotBuf { buf, len }
+    }
+
+    pub fn buf(&self) -> &[u8] {
+        self.buf
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 #[cfg(test)]
 mod tests {
